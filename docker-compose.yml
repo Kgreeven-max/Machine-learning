@@ -1,6 +1,47 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database for logging
+  postgres:
+    image: postgres:16-alpine
+    container_name: ollama-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=ollama_logs
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ollama_network
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ollama-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@localhost.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - ollama_network
+
+  # Ollama LLM Service
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -16,6 +57,7 @@ services:
       - OLLAMA_NUM_CTX=32768
       - OLLAMA_NUM_PARALLEL=4
       - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_DEBUG=2
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -25,6 +67,35 @@ services:
     networks:
       - ollama_network
 
+  # Logger Middleware (logs all requests/responses)
+  logger:
+    build: ./logger
+    container_name: ollama-logger
+    restart: unless-stopped
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ollama_logs
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - ELECTRICITY_RATE=${ELECTRICITY_RATE:-0.383}
+      - M4_MAX_POWER_WATTS=${M4_MAX_POWER_WATTS:-80}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ollama_network
+
+  # Nginx API Gateway
   nginx:
     image: nginx:alpine
     container_name: nginx-proxy
@@ -37,11 +108,31 @@ services:
     environment:
       - API_KEY=${API_KEY}
     depends_on:
-      ollama:
+      logger:
         condition: service_healthy
     networks:
       - ollama_network
 
+  # Web Dashboard
+  dashboard:
+    build: ./dashboard
+    container_name: ollama-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ollama_logs
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ollama_network
+
+  # Cloudflare Tunnel
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflare-tunnel
@@ -58,6 +149,10 @@ volumes:
   ollama_data:
     driver: local
   nginx_logs:
+    driver: local
+  postgres_data:
+    driver: local
+  pgadmin_data:
     driver: local
 
 networks:
