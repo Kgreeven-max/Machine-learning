@@ -1,0 +1,16 @@
+# Environment files with secrets
+.env
+
+# Tunnel configuration
+tunnel.json
+*.pem
+
+# Logs
+nginx/logs/
+*.log
+
+# Docker volumes
+ollama_data/
+
+# macOS
+.DS_Store
