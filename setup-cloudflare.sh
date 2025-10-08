@@ -12,7 +12,7 @@ ZONE_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=
   -H "Authorization: Bearer ${CLOUDFLARE_API_KEY}" \
   -H "Content-Type: application/json")
 
-ACCOUNT_ID=$(echo "$ZONE_RESPONSE" | grep -o '"account_id":"[^"]*' | head -1 | cut -d'"' -f4)
+ACCOUNT_ID=$(echo "$ZONE_RESPONSE" | grep -o '"account":{"id":"[^"]*' | head -1 | cut -d'"' -f6)
 
 if [ -z "$ACCOUNT_ID" ]; then
     echo "❌ Could not find account ID for domain ${CLOUDFLARE_DOMAIN}"

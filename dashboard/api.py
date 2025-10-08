@@ -4,7 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import asyncpg
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 app = FastAPI()
@@ -25,8 +26,23 @@ DB_NAME = os.getenv("DB_NAME", "ollama_logs")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
 
+# Timezone configuration
+PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
+
 # Database connection pool
 db_pool: Optional[asyncpg.Pool] = None
+
+def utc_to_pacific(utc_dt: datetime) -> datetime:
+    """Convert UTC datetime to Pacific Time"""
+    if utc_dt.tzinfo is None:
+        # Assume UTC if no timezone info
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    return utc_dt.astimezone(PACIFIC_TZ)
+
+def format_timestamp(dt: datetime) -> str:
+    """Format timestamp in Pacific Time"""
+    pacific_dt = utc_to_pacific(dt)
+    return pacific_dt.isoformat()
 
 async def get_db_pool():
     """Get or create database connection pool"""
@@ -68,16 +84,22 @@ async def get_overview_stats(
     """Get overview statistics for a given period"""
     pool = await get_db_pool()
 
-    # Calculate date range
-    now = datetime.utcnow()
+    # Calculate date range (using Pacific time for "today")
+    now_utc = datetime.now(timezone.utc)
+    now_pacific = now_utc.astimezone(PACIFIC_TZ)
+
     if period == "today":
-        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Start of today in Pacific time, converted back to UTC for query
+        start_date = now_pacific.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).replace(tzinfo=None)
     elif period == "week":
-        start_date = now - timedelta(days=7)
+        start_date = now_utc - timedelta(days=7)
+        start_date = start_date.replace(tzinfo=None)
     elif period == "month":
-        start_date = now - timedelta(days=30)
+        start_date = now_utc - timedelta(days=30)
+        start_date = start_date.replace(tzinfo=None)
     elif period == "year":
-        start_date = now - timedelta(days=365)
+        start_date = now_utc - timedelta(days=365)
+        start_date = start_date.replace(tzinfo=None)
     else:  # all
         start_date = datetime(2000, 1, 1)
 
@@ -94,7 +116,7 @@ async def get_overview_stats(
                 AVG(cost_dollars) as avg_cost_dollars,
                 COUNT(CASE WHEN error_message IS NOT NULL THEN 1 END) as total_errors
             FROM request_logs
-            WHERE timestamp >= $1
+            WHERE timestamp >= $1 AND http_status = 200
         ''', start_date)
 
         return {
@@ -115,7 +137,8 @@ async def get_hourly_stats(hours: int = 24):
     """Get hourly statistics for the last N hours"""
     pool = await get_db_pool()
 
-    start_time = datetime.utcnow() - timedelta(hours=hours)
+    now_utc = datetime.now(timezone.utc)
+    start_time = (now_utc - timedelta(hours=hours)).replace(tzinfo=None)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch('''
@@ -126,7 +149,7 @@ async def get_hourly_stats(hours: int = 24):
                 SUM(power_wh) as total_power_wh,
                 SUM(cost_dollars) as total_cost_dollars
             FROM request_logs
-            WHERE timestamp >= $1 AND error_message IS NULL
+            WHERE timestamp >= $1 AND http_status = 200
             GROUP BY DATE_TRUNC('hour', timestamp)
             ORDER BY hour ASC
         ''', start_time)
@@ -134,7 +157,7 @@ async def get_hourly_stats(hours: int = 24):
         return {
             "hours": [
                 {
-                    "hour": row["hour"].isoformat(),
+                    "hour": format_timestamp(row["hour"]),
                     "requests": row["total_requests"],
                     "tokens": int(row["total_tokens"] or 0),
                     "power_wh": round(float(row["total_power_wh"] or 0), 4),
@@ -159,11 +182,12 @@ async def get_recent_logs(limit: int = 50, offset: int = 0):
                 duration_seconds, power_wh, cost_dollars,
                 http_status, error_message
             FROM request_logs
+            WHERE http_status = 200
             ORDER BY timestamp DESC
             LIMIT $1 OFFSET $2
         ''', limit, offset)
 
-        total_count = await conn.fetchval('SELECT COUNT(*) FROM request_logs')
+        total_count = await conn.fetchval('SELECT COUNT(*) FROM request_logs WHERE http_status = 200')
 
         return {
             "total": total_count,
@@ -172,7 +196,7 @@ async def get_recent_logs(limit: int = 50, offset: int = 0):
             "logs": [
                 {
                     "id": row["id"],
-                    "timestamp": row["timestamp"].isoformat(),
+                    "timestamp": format_timestamp(row["timestamp"]),
                     "ip_address": row["ip_address"],
                     "api_key": row["api_key"][:20] + "..." if row["api_key"] else None,
                     "model": row["model"],
@@ -206,7 +230,7 @@ async def get_log_detail(log_id: int):
 
         return {
             "id": row["id"],
-            "timestamp": row["timestamp"].isoformat(),
+            "timestamp": format_timestamp(row["timestamp"]),
             "ip_address": row["ip_address"],
             "api_key": row["api_key"],
             "model": row["model"],
@@ -220,7 +244,7 @@ async def get_log_detail(log_id: int):
             "cost_dollars": round(float(row["cost_dollars"]), 8),
             "http_status": row["http_status"],
             "error_message": row["error_message"],
-            "created_at": row["created_at"].isoformat()
+            "created_at": format_timestamp(row["created_at"])
         }
 
 @app.get("/api/search")
@@ -246,7 +270,7 @@ async def search_logs(q: str, limit: int = 50):
             "results": [
                 {
                     "id": row["id"],
-                    "timestamp": row["timestamp"].isoformat(),
+                    "timestamp": format_timestamp(row["timestamp"]),
                     "model": row["model"],
                     "prompt_preview": row["prompt_preview"],
                     "response_preview": row["response_preview"],

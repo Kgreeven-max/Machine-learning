@@ -11,6 +11,9 @@ import asyncio
 
 app = FastAPI()
 
+# Persistent HTTP client for proxying
+http_client = None
+
 # Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 DB_HOST = os.getenv("DB_HOST", "postgres")
@@ -82,9 +85,100 @@ def calculate_cost(duration_seconds: float) -> tuple[float, float]:
     cost_dollars = power_kwh * ELECTRICITY_RATE
     return power_wh, cost_dollars
 
+def transform_ollama_to_openai_streaming(ollama_chunk: dict, model: str) -> dict:
+    """Transform Ollama streaming chunk to OpenAI format"""
+    import uuid
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+    # Extract content from Ollama format
+    content = ""
+    finish_reason = None
+
+    if "message" in ollama_chunk:
+        content = ollama_chunk["message"].get("content", "")
+    elif "response" in ollama_chunk:
+        content = ollama_chunk.get("response", "")
+
+    if ollama_chunk.get("done", False):
+        finish_reason = "stop"
+
+    # Build OpenAI streaming format
+    openai_chunk = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content} if content else {},
+                "finish_reason": finish_reason
+            }
+        ]
+    }
+
+    return openai_chunk
+
+def transform_ollama_to_openai_complete(ollama_response: dict, model: str, prompt_tokens: int, completion_tokens: int) -> dict:
+    """Transform Ollama complete response to OpenAI format"""
+    import uuid
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+
+    # Extract content from Ollama format
+    content = ""
+    if "message" in ollama_response:
+        content = ollama_response["message"].get("content", "")
+    elif "response" in ollama_response:
+        content = ollama_response.get("response", "")
+
+    # Build OpenAI completion format
+    openai_response = {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens
+        }
+    }
+
+    return openai_response
+
+def transform_models_response(ollama_models: dict) -> dict:
+    """Transform Ollama models list to OpenAI format"""
+    models_list = []
+
+    if "models" in ollama_models:
+        for model in ollama_models["models"]:
+            models_list.append({
+                "id": model.get("name", "unknown"),
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "ollama"
+            })
+
+    return {
+        "object": "list",
+        "data": models_list
+    }
+
 @app.on_event("startup")
 async def startup():
-    """Initialize database connection on startup"""
+    """Initialize database connection and HTTP client on startup"""
+    global http_client
+    http_client = httpx.AsyncClient(timeout=300.0)
     await get_db_pool()
     print(f"Logger started - forwarding to {OLLAMA_URL}")
     print(f"Electricity rate: ${ELECTRICITY_RATE}/kWh (San Diego SDG&E)")
@@ -92,8 +186,10 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    """Close database connection on shutdown"""
-    global db_pool
+    """Close database connection and HTTP client on shutdown"""
+    global db_pool, http_client
+    if http_client:
+        await http_client.aclose()
     if db_pool:
         await db_pool.close()
 
@@ -136,124 +232,156 @@ async def proxy(request: Request, path: str):
     url = f"{OLLAMA_URL}/{path}"
 
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            # Check if streaming is enabled
-            is_streaming = body_json.get("stream", True) if body_json else True
+        # Check if streaming is enabled (GET requests are never streaming)
+        is_streaming = body_json.get("stream", True) if body_json and request.method == "POST" else False
 
-            if is_streaming:
-                # Handle streaming response
-                async def stream_and_collect():
-                    full_response = ""
-                    response_status = 200
+        if is_streaming:
+            # Handle streaming response
+            async def stream_and_collect():
+                full_response = ""
+                response_status = 200
 
-                    async with client.stream(
-                        method=request.method,
-                        url=url,
-                        headers=dict(request.headers),
-                        content=body
-                    ) as response:
-                        response_status = response.status_code
-
-                        async for chunk in response.aiter_bytes():
-                            # Collect response text
-                            try:
-                                chunk_str = chunk.decode('utf-8')
-                                for line in chunk_str.split('\n'):
-                                    if line.strip():
-                                        chunk_json = json.loads(line)
-                                        if "message" in chunk_json:
-                                            full_response += chunk_json["message"].get("content", "")
-                                        elif "response" in chunk_json:
-                                            full_response += chunk_json.get("response", "")
-                            except:
-                                pass
-
-                            yield chunk
-
-                    # Calculate metrics
-                    end_time = time.time()
-                    duration_seconds = end_time - start_time
-                    power_wh, cost_dollars = calculate_cost(duration_seconds)
-
-                    # Estimate tokens (rough approximation: 1 token ≈ 4 chars)
-                    prompt_tokens = len(prompt) // 4
-                    completion_tokens = len(full_response) // 4
-                    total_tokens = prompt_tokens + completion_tokens
-
-                    # Log to database
-                    asyncio.create_task(log_request(
-                        timestamp=timestamp,
-                        ip_address=ip_address,
-                        api_key=api_key,
-                        model=model,
-                        prompt=prompt,
-                        response_text=full_response,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                        duration_seconds=duration_seconds,
-                        power_wh=power_wh,
-                        cost_dollars=cost_dollars,
-                        http_status=response_status
-                    ))
-
-                return StreamingResponse(
-                    stream_and_collect(),
-                    media_type="application/json"
-                )
-
-            else:
-                # Handle non-streaming response
-                response = await client.request(
+                async with http_client.stream(
                     method=request.method,
                     url=url,
                     headers=dict(request.headers),
                     content=body
-                )
+                ) as response:
+                    response_status = response.status_code
 
+                    async for chunk in response.aiter_bytes():
+                        # Collect response text and transform to OpenAI format
+                        try:
+                            chunk_str = chunk.decode('utf-8')
+                            for line in chunk_str.split('\n'):
+                                if line.strip():
+                                    ollama_chunk = json.loads(line)
+
+                                    # Collect content for logging
+                                    if "message" in ollama_chunk:
+                                        full_response += ollama_chunk["message"].get("content", "")
+                                    elif "response" in ollama_chunk:
+                                        full_response += ollama_chunk.get("response", "")
+
+                                    # Transform to OpenAI format
+                                    openai_chunk = transform_ollama_to_openai_streaming(ollama_chunk, model)
+                                    transformed_line = json.dumps(openai_chunk) + "\n"
+                                    yield transformed_line.encode('utf-8')
+                        except Exception as e:
+                            # If transformation fails, pass through original chunk
+                            print(f"Chunk transformation error: {e}")
+                            yield chunk
+
+                # Calculate metrics
                 end_time = time.time()
                 duration_seconds = end_time - start_time
                 power_wh, cost_dollars = calculate_cost(duration_seconds)
 
-                # Parse response
-                response_json = {}
-                response_text = ""
-                try:
-                    response_json = response.json()
-                    if "message" in response_json:
-                        response_text = response_json["message"].get("content", "")
-                    elif "response" in response_json:
-                        response_text = response_json.get("response", "")
-                except:
-                    pass
-
-                # Estimate tokens
+                # Estimate tokens (rough approximation: 1 token ≈ 4 chars)
                 prompt_tokens = len(prompt) // 4
-                completion_tokens = len(response_text) // 4
+                completion_tokens = len(full_response) // 4
                 total_tokens = prompt_tokens + completion_tokens
 
                 # Log to database
-                await log_request(
+                asyncio.create_task(log_request(
                     timestamp=timestamp,
                     ip_address=ip_address,
                     api_key=api_key,
                     model=model,
                     prompt=prompt,
-                    response_text=response_text,
+                    response_text=full_response,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,
                     duration_seconds=duration_seconds,
                     power_wh=power_wh,
                     cost_dollars=cost_dollars,
-                    http_status=response.status_code
-                )
+                    http_status=response_status
+                ))
 
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=dict(response.headers)
-                )
+            return StreamingResponse(
+                stream_and_collect(),
+                media_type="application/json"
+            )
+
+        else:
+            # Handle non-streaming response
+            response = await http_client.request(
+                method=request.method,
+                url=url,
+                headers=dict(request.headers),
+                content=body
+            )
+
+            end_time = time.time()
+            duration_seconds = end_time - start_time
+            power_wh, cost_dollars = calculate_cost(duration_seconds)
+
+            # Parse response
+            response_json = {}
+            response_text = ""
+            try:
+                response_json = response.json()
+                if "message" in response_json:
+                    response_text = response_json["message"].get("content", "")
+                elif "response" in response_json:
+                    response_text = response_json.get("response", "")
+            except:
+                pass
+
+            # Estimate tokens
+            prompt_tokens = len(prompt) // 4
+            completion_tokens = len(response_text) // 4
+            total_tokens = prompt_tokens + completion_tokens
+
+            # Log to database
+            await log_request(
+                timestamp=timestamp,
+                ip_address=ip_address,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+                response_text=response_text,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                duration_seconds=duration_seconds,
+                power_wh=power_wh,
+                cost_dollars=cost_dollars,
+                http_status=response.status_code
+            )
+
+            # Transform to OpenAI format based on endpoint
+            if path in ["api/chat", "api/generate"]:
+                try:
+                    openai_response = transform_ollama_to_openai_complete(
+                        response_json, model, prompt_tokens, completion_tokens
+                    )
+                    return Response(
+                        content=json.dumps(openai_response),
+                        status_code=response.status_code,
+                        headers={"Content-Type": "application/json"}
+                    )
+                except Exception as e:
+                    print(f"Non-streaming transformation error: {e}")
+                    # Fall through to original response
+            elif path == "api/tags":
+                try:
+                    openai_response = transform_models_response(response_json)
+                    return Response(
+                        content=json.dumps(openai_response),
+                        status_code=response.status_code,
+                        headers={"Content-Type": "application/json"}
+                    )
+                except Exception as e:
+                    print(f"Models transformation error: {e}")
+                    # Fall through to original response
+
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=dict(response.headers)
+            )
 
     except Exception as e:
         # Log error

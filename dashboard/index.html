@@ -213,6 +213,41 @@
             color: #94a3b8;
         }
 
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+            padding: 15px;
+        }
+
+        .pagination-info {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+
+        .pagination-btn {
+            background: #334155;
+            color: #e2e8f0;
+            border: 1px solid #475569;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: #475569;
+            border-color: #667eea;
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         @media (max-width: 768px) {
             .stats-grid {
                 grid-template-columns: 1fr;
@@ -304,12 +339,20 @@
                     </tbody>
                 </table>
             </div>
+            <div class="pagination">
+                <button class="pagination-btn" id="prev-btn" onclick="previousPage()" disabled>← Previous</button>
+                <span class="pagination-info" id="page-info">Page 1 of 1</span>
+                <button class="pagination-btn" id="next-btn" onclick="nextPage()" disabled>Next →</button>
+            </div>
         </div>
     </div>
 
     <script>
         let currentPeriod = 'today';
         let hourlyChart = null;
+        let currentPage = 1;
+        let itemsPerPage = 20;
+        let totalItems = 0;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
@@ -437,14 +480,19 @@
 
         async function loadRecentLogs() {
             try {
-                const response = await fetch('/api/logs/recent?limit=50');
+                const offset = (currentPage - 1) * itemsPerPage;
+                const response = await fetch(`/api/logs/recent?limit=${itemsPerPage}&offset=${offset}`);
                 const data = await response.json();
+
+                totalItems = data.total;
+                const totalPages = Math.ceil(totalItems / itemsPerPage);
 
                 const tbody = document.getElementById('logs-tbody');
                 tbody.innerHTML = '';
 
                 if (data.logs.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="8" class="loading">No logs yet</td></tr>';
+                    updatePaginationControls(0);
                     return;
                 }
 
@@ -466,8 +514,42 @@
                     `;
                     tbody.appendChild(tr);
                 });
+
+                updatePaginationControls(totalPages);
             } catch (error) {
                 console.error('Error loading recent logs:', error);
+            }
+        }
+
+        function updatePaginationControls(totalPages) {
+            const pageInfo = document.getElementById('page-info');
+            const prevBtn = document.getElementById('prev-btn');
+            const nextBtn = document.getElementById('next-btn');
+
+            if (totalPages === 0) {
+                pageInfo.textContent = 'No results';
+                prevBtn.disabled = true;
+                nextBtn.disabled = true;
+                return;
+            }
+
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+            prevBtn.disabled = currentPage === 1;
+            nextBtn.disabled = currentPage === totalPages;
+        }
+
+        function previousPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                loadRecentLogs();
+            }
+        }
+
+        function nextPage() {
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                loadRecentLogs();
             }
         }
 
@@ -475,6 +557,7 @@
             const query = document.getElementById('search-box').value;
 
             if (query.length < 2) {
+                currentPage = 1;
                 loadRecentLogs();
                 return;
             }

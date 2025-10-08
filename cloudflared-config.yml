@@ -1,0 +1,7 @@
+tunnel: 44512531-4335-403c-b2af-3115116d342e
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - hostname: api.kendall-max.org
+    service: http://nginx:80
+  - service: http_status:404
