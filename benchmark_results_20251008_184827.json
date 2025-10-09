@@ -1,0 +1,140 @@
+[
+  {
+    "test_name": "Baseline - Single Request",
+    "total_requests": 1,
+    "successful_requests": 1,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "2.73s",
+    "requests_per_second": "0.37",
+    "latency": {
+      "min": "2.67s",
+      "max": "2.67s",
+      "mean": "2.67s",
+      "median": "2.67s",
+      "p95": "N/A",
+      "p99": "N/A"
+    },
+    "tokens": {
+      "total": 0,
+      "mean_per_request": "0",
+      "tokens_per_second_mean": "0.0",
+      "tokens_per_second_max": "0.0"
+    }
+  },
+  {
+    "test_name": "Small Prompts - 5 Concurrent",
+    "total_requests": 10,
+    "successful_requests": 10,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "2.36s",
+    "requests_per_second": "4.23",
+    "latency": {
+      "min": "0.27s",
+      "max": "1.93s",
+      "mean": "1.13s",
+      "median": "1.18s",
+      "p95": "1.93s",
+      "p99": "1.93s"
+    },
+    "tokens": {
+      "total": 0,
+      "mean_per_request": "0",
+      "tokens_per_second_mean": "0.0",
+      "tokens_per_second_max": "0.0"
+    }
+  },
+  {
+    "test_name": "Medium Prompts - 5 Concurrent",
+    "total_requests": 10,
+    "successful_requests": 10,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "51.47s",
+    "requests_per_second": "0.19",
+    "latency": {
+      "min": "16.27s",
+      "max": "35.20s",
+      "mean": "21.42s",
+      "median": "19.50s",
+      "p95": "35.20s",
+      "p99": "35.20s"
+    },
+    "tokens": {
+      "total": 1568,
+      "mean_per_request": "157",
+      "tokens_per_second_mean": "7.7",
+      "tokens_per_second_max": "11.6"
+    }
+  },
+  {
+    "test_name": "Medium Prompts - 10 Concurrent",
+    "total_requests": 20,
+    "successful_requests": 20,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "85.49s",
+    "requests_per_second": "0.23",
+    "latency": {
+      "min": "14.11s",
+      "max": "47.34s",
+      "mean": "34.66s",
+      "median": "38.07s",
+      "p95": "47.34s",
+      "p99": "47.34s"
+    },
+    "tokens": {
+      "total": 3157,
+      "mean_per_request": "158",
+      "tokens_per_second_mean": "5.1",
+      "tokens_per_second_max": "9.5"
+    }
+  },
+  {
+    "test_name": "Large Prompts - 3 Concurrent",
+    "total_requests": 5,
+    "successful_requests": 5,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "146.25s",
+    "requests_per_second": "0.03",
+    "latency": {
+      "min": "64.52s",
+      "max": "85.39s",
+      "mean": "74.43s",
+      "median": "76.02s",
+      "p95": "85.39s",
+      "p99": "85.39s"
+    },
+    "tokens": {
+      "total": 3442,
+      "mean_per_request": "688",
+      "tokens_per_second_mean": "9.3",
+      "tokens_per_second_max": "10.4"
+    }
+  },
+  {
+    "test_name": "Stress Test - 20 Concurrent",
+    "total_requests": 30,
+    "successful_requests": 30,
+    "failed_requests": 0,
+    "success_rate": "100.0%",
+    "total_time": "133.91s",
+    "requests_per_second": "0.22",
+    "latency": {
+      "min": "18.58s",
+      "max": "99.97s",
+      "mean": "68.51s",
+      "median": "78.71s",
+      "p95": "98.85s",
+      "p99": "99.97s"
+    },
+    "tokens": {
+      "total": 4548,
+      "mean_per_request": "152",
+      "tokens_per_second_mean": "2.9",
+      "tokens_per_second_max": "7.5"
+    }
+  }
+]
