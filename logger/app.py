@@ -193,6 +193,11 @@ async def shutdown():
     if db_pool:
         await db_pool.close()
 
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "ollama-logger"}
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, path: str):
     """Proxy all requests to Ollama and log everything"""
@@ -411,8 +416,3 @@ async def proxy(request: Request, path: str):
             status_code=500,
             media_type="application/json"
         )
-
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "ollama-logger"}
